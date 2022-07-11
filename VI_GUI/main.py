@@ -14,8 +14,12 @@ import torch
 
 from core.utils import to_tensors
 
-from PyQt5.QtCore import QThread, pyqtSignal
+from PyQt5.QtCore import QThread, pyqtSignal, QUrl
 from PyQt5 import QtWidgets
+from PyQt5.QtGui import QIcon, QPainter, QPixmap
+from PyQt5.QtMultimedia import QMediaContent, QMediaPlayer
+from PyQt5.QtMultimediaWidgets import QVideoWidget
+
 import design
 
 ref_length = 10  # ref_step
@@ -56,6 +60,18 @@ def read_mask(mpath, size):
         masks.append(Image.fromarray(m * 255))
     return masks
 
+def clone_mask(mpath, size, maskcnt):
+    masks = []
+    for _ in range(maskcnt):
+        m = Image.open(mpath)
+        m = m.resize(size, Image.NEAREST)
+        m = np.array(m.convert('L'))
+        m = np.array(m > 0).astype(np.uint8)
+        m = cv2.dilate(m,
+                       cv2.getStructuringElement(cv2.MORPH_CROSS, (3, 3)),
+                       iterations=4)
+        masks.append(Image.fromarray(m * 255))
+    return masks
 
 #  read frames from video
 def read_frame_from_videos(video, use_mp4):
@@ -93,7 +109,7 @@ class External(QThread):
     countChanged = pyqtSignal(int)
     maxValPass = pyqtSignal(int)
     endSignal = pyqtSignal(int)
-    def __init__(self, model, video, ckpt, mask):
+    def __init__(self, model, video, ckpt, mask, savepass, wtm = False):
         super(QThread, self).__init__()
         self.model = model
         self.video = video
@@ -102,6 +118,8 @@ class External(QThread):
         self.set_size = None
         self.width = None
         self.height = None
+        self.savepass = savepass
+        self.wtm = wtm
     def run(self):
         # set up models
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -128,8 +146,10 @@ class External(QThread):
         video_length = len(frames)
         imgs = to_tensors()(frames).unsqueeze(0) * 2 - 1
         frames = [np.array(f).astype(np.uint8) for f in frames]
-
-        masks = read_mask(self.mask, size)
+        if(self.wtm):
+            masks = clone_mask(self.mask, size, video_length)
+        else:
+            masks = read_mask(self.mask, size)
         binary_masks = [
             np.expand_dims((np.array(m) != 0).astype(np.uint8), 2) for m in masks
         ]
@@ -179,7 +199,7 @@ class External(QThread):
 
         # saving videos
         print('Saving videos...')
-        save_dir_name = 'results'
+        save_dir_name = self.savepass
         ext_name = '_results.mp4'
         save_base_name = self.video.split('/')[-1]
         save_name = save_base_name.replace(
@@ -196,61 +216,150 @@ class External(QThread):
         print(f'Finish test! The result video is saved in: {save_path}.')
         self.endSignal.emit(0)
         # show results
-        print('Let us enjoy the result!')
-        fig = plt.figure('Let us enjoy the result')
-        ax1 = fig.add_subplot(1, 2, 1)
-        ax1.axis('off')
-        ax1.set_title('Original Video')
-        ax2 = fig.add_subplot(1, 2, 2)
-        ax2.axis('off')
-        ax2.set_title('Our Result')
-        imdata1 = ax1.imshow(frames[0])
-        imdata2 = ax2.imshow(comp_frames[0].astype(np.uint8))
-
-        def update(idx):
-            imdata1.set_data(frames[idx])
-            imdata2.set_data(comp_frames[idx].astype(np.uint8))
-
-        fig.tight_layout()
-        anim = animation.FuncAnimation(fig,
-                                       update,
-                                       frames=len(frames),
-                                       interval=50)
-        plt.show()
 
 class ExampleApp(QtWidgets.QMainWindow, design.Ui_MainWindow):
     def __init__(self):
         super(ExampleApp, self).__init__()
         self.setupUi(self)
+        self.stackedWidget.setCurrentIndex(0)
+        self.pushButton.clicked.connect(self.simple_regime)
+        self.pushButton_2.clicked.connect(self.watermark_regime)
+        self.pushButton_3.clicked.connect(self.exit_app)
         self.VideoChoose.clicked.connect(self.video_choose)
         self.MaskChoose.clicked.connect(self.mask_choose)
+        self.SaveChoose.clicked.connect(self.save_choose)
         self.Start.clicked.connect(self.start_process)
+        self.VideoChoose2.clicked.connect(self.video_choose2)
+        self.VideoPlay.setIcon(QIcon('play.png'))
+        self.VideoPlay.setEnabled(False)
+        self.VideoPlay.clicked.connect(self.play)
+        self.horizontalSlider.sliderMoved.connect(self.setPosition)
         self.QualityChooseGroup = QtWidgets.QButtonGroup()
         self.QualityChooseGroup.addButton(self.Low_quality)
         self.QualityChooseGroup.addButton(self.Any_quality)
+        self.mediaPlayer = QMediaPlayer(None, QMediaPlayer.VideoSurface)
+        self.mediaPlayer.stateChanged.connect(self.mediaStateChanged)
+        self.mediaPlayer.positionChanged.connect(self.positionChanged)
+        self.mediaPlayer.durationChanged.connect(self.durationChanged)
+        self.mediaPlayer.error.connect(self.handleError)
+        self.mediaPlayer.setVideoOutput(self.widget)
+        self.BackButton2.clicked.connect(self.back2)
+        self.NextButton.clicked.connect(self.next)
+        self.BackButton3.clicked.connect(self.back3)
+        self.MaskChoose2.clicked.connect(self.mask_choose2)
+        self.NextButton2.clicked.connect(self.next2)
+        self.BackButton4.clicked.connect(self.back4)
+        self.QualityChooseGroup2 = QtWidgets.QButtonGroup()
+        self.QualityChooseGroup2.addButton(self.LowQuality)
+        self.QualityChooseGroup2.addButton(self.AnyQuality)
+        self.SaveChoose2.clicked.connect(self.save_choose2)
+        self.Start2.clicked.connect(self.start_process2)
+    
+    def back4(self):
+        self.stackedWidget.setCurrentIndex(3)
+
+    def next2(self):
+        self.stackedWidget.setCurrentIndex(4)
+
+    def start_process2(self):
+        if self.LowQuality.isChecked():
+            self.stackedWidget.setCurrentIndex(5)
+            self.calc = External("e2fgvi", self.VideoName.text(), "release_model/E2FGVI-CVPR22.pth", self.MaskName.text(), self.SavePath2.toPlainText(), True)
+            self.calc.countChanged.connect(self.onCountChanged)
+            self.calc.maxValPass.connect(self.onMaxVal)
+            self.calc.endSignal.connect(self.endProcess)
+            self.calc.start()
+        if self.AnyQuality.isChecked():
+            self.stackedWidget.setCurrentIndex(5)
+            self.calc = External("e2fgvi_hq", self.VideoName.text(), "release_model/E2FGVI-HQ-CVPR22.pth", self.MaskName.text(), self.SavePath2.toPlainText(), True)
+            self.calc.countChanged.connect(self.onCountChanged)
+            self.calc.maxValPass.connect(self.onMaxVal)
+            self.calc.endSignal.connect(self.endProcess)
+            self.calc.start()
+
+    def mask_choose2(self):
+        MaskDirectory = QtWidgets.QFileDialog.getOpenFileName(self, "Выберите файл", './', 'Images (*.jpg *.png *.jpeg)')
+        self.MaskName.setText(str(MaskDirectory[0]))
+        pixmap = QPixmap(str(MaskDirectory[0]))
+        pixmap = pixmap.scaledToHeight(self.PhotoShow.height())
+        self.PhotoShow.setPixmap(pixmap)
+
+    def next(self):
+        self.stackedWidget.setCurrentIndex(3)
+
+    def back2(self):
+        self.stackedWidget.setCurrentIndex(0)
+
+    def back3(self):
+        self.stackedWidget.setCurrentIndex(2)
+
+    def simple_regime(self):
+        self.stackedWidget.setCurrentIndex(1)
+
+    def watermark_regime(self):
+        self.stackedWidget.setCurrentIndex(2)
+
+    def exit_app(self):
+        self.close()
+
+    def setPosition(self, position):
+        self.mediaPlayer.setPosition(position)
+
+    def mediaStateChanged(self, state):
+        if self.mediaPlayer.state() == QMediaPlayer.PlayingState:
+            self.VideoPlay.setIcon(QIcon('pause.png'))
+        else:
+            self.VideoPlay.setIcon(QIcon('play.png'))
+
+    def positionChanged(self, position):
+        self.horizontalSlider.setValue(position)
+
+    def durationChanged(self, duration):
+        self.horizontalSlider.setRange(0, duration)
+
+    def handleError(self):
+        self.VideoPlay.setEnabled(False)
+        QtWidgets.QMessageBox.warning(None, "Внимание", "Ошибка: " + self.mediaPlayer.errorString())
+
+    def save_choose(self):
+        self.SavePath.clear()
+        SaveDirectory = QtWidgets.QFileDialog.getExistingDirectory(self, "Выберите папку")
+        if SaveDirectory:
+            self.SavePath.setText(str(SaveDirectory))
+            self.SavePath.adjustSize()
+
+    def save_choose2(self):
+        self.SavePath2.clear()
+        SaveDirectory = QtWidgets.QFileDialog.getExistingDirectory(self, "Выберите папку")
+        if SaveDirectory:
+            self.SavePath2.setText(str(SaveDirectory))
+            self.SavePath2.adjustSize()
+
     def video_choose(self):
         self.VideoPath.clear()
         VideoDirectory = QtWidgets.QFileDialog.getOpenFileName(self, "Выберите файл", './', 'Files (*.mp4 *.avi *.mov *.mkv *.mpg)')
         if VideoDirectory:
             self.VideoPath.setText(str(VideoDirectory[0]))
             self.VideoPath.adjustSize()
+
     def mask_choose(self):
         self.MaskPath.clear()
         MaskDirectory = QtWidgets.QFileDialog.getExistingDirectory(self, "Выберите папку")
         if MaskDirectory:
             self.MaskPath.setText(str(MaskDirectory))
             self.MaskPath.adjustSize()
+
     def start_process(self):
         if self.Low_quality.isChecked():
-            self.stackedWidget.setCurrentIndex(1)
-            self.calc = External("e2fgvi", self.VideoPath.toPlainText(), "release_model/E2FGVI-CVPR22.pth", self.MaskPath.toPlainText())
+            self.stackedWidget.setCurrentIndex(5)
+            self.calc = External("e2fgvi", self.VideoPath.toPlainText(), "release_model/E2FGVI-CVPR22.pth", self.MaskPath.toPlainText(), self.SavePath.toPlainText())
             self.calc.countChanged.connect(self.onCountChanged)
             self.calc.maxValPass.connect(self.onMaxVal)
             self.calc.endSignal.connect(self.endProcess)
             self.calc.start()
         elif self.Any_quality.isChecked():
-            self.stackedWidget.setCurrentIndex(1)
-            self.calc = External("e2fgvi_hq", self.VideoPath.toPlainText(), "release_model/E2FGVI-HQ-CVPR22.pth", self.MaskPath.toPlainText())
+            self.stackedWidget.setCurrentIndex(5)
+            self.calc = External("e2fgvi_hq", self.VideoPath.toPlainText(), "release_model/E2FGVI-HQ-CVPR22.pth", self.MaskPath.toPlainText(), self.SavePath.toPlainText())
             self.calc.countChanged.connect(self.onCountChanged)
             self.calc.maxValPass.connect(self.onMaxVal)
             self.calc.endSignal.connect(self.endProcess)
@@ -258,19 +367,37 @@ class ExampleApp(QtWidgets.QMainWindow, design.Ui_MainWindow):
         else:
             print("debug")
             QtWidgets.QMessageBox.warning(None, "Внимание", "Вы не выбрали разрешение")
+
+    def video_choose2(self):
+        VideoDirectory = QtWidgets.QFileDialog.getOpenFileName(self, "Выберите файл", './', 'Files (*.mp4 *.avi *.mov *.mkv *.mpg)')
+        if VideoDirectory:
+            self.mediaPlayer.setMedia(QMediaContent(QUrl.fromLocalFile(str(VideoDirectory[0]))))
+            self.VideoPlay.setEnabled(True)
+            self.VideoName.setText(str(VideoDirectory[0]))
+            self.play()
+
+    def play(self):
+        if self.mediaPlayer.state() == QMediaPlayer.PlayingState:
+            self.mediaPlayer.pause()
+        else:
+            self.mediaPlayer.play()
+
     def onCountChanged(self, value):
         self.progressBar.setValue(value)
+
     def onMaxVal(self, value):
         self.progressBar.setMaximum(value)
+
     def endProcess(self, val):
         self.stackedWidget.setCurrentIndex(val)
-        QtWidgets.QMessageBox.about(None, "Успех", "Вы не выбрали разрешение")
+        QtWidgets.QMessageBox.about(None, "Успех", "Видео сохранено")
+
 
 def main():
     app = QtWidgets.QApplication(sys.argv)
     window = ExampleApp()
     window.show()
-    sys.exit(app.exec_())
+    app.exec_()
 
 if __name__ == '__main__':
     main()
