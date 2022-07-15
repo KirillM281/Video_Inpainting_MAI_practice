@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import cv2
 from PIL import Image
+from PIL.ImageQt import ImageQt
 import numpy as np
 import importlib
 import sys
@@ -14,9 +15,9 @@ import torch
 
 from core.utils import to_tensors
 
-from PyQt5.QtCore import QThread, pyqtSignal, QUrl
+from PyQt5.QtCore import QThread, pyqtSignal, QUrl, Qt, QRectF, QPointF, QFile, QIODevice
 from PyQt5 import QtWidgets
-from PyQt5.QtGui import QIcon, QPainter, QPixmap
+from PyQt5.QtGui import QIcon, QPainter, QPixmap, QPen
 from PyQt5.QtMultimedia import QMediaContent, QMediaPlayer
 from PyQt5.QtMultimediaWidgets import QVideoWidget
 
@@ -104,6 +105,16 @@ def resize_frames(frames, size=None):
     else:
         size = frames[0].size
     return frames, size
+
+def get_frame_from_video(video, use_mp4):
+    vname = video
+    if use_mp4:
+        vidcap = cv2.VideoCapture(vname)
+        success, image = vidcap.read()
+        success, image = vidcap.read()
+        if success:
+            image = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+            return image
 
 class External(QThread):
     countChanged = pyqtSignal(int)
@@ -221,6 +232,7 @@ class ExampleApp(QtWidgets.QMainWindow, design.Ui_MainWindow):
     def __init__(self):
         super(ExampleApp, self).__init__()
         self.setupUi(self)
+        self.PenSize = 5
         self.stackedWidget.setCurrentIndex(0)
         self.pushButton.clicked.connect(self.simple_regime)
         self.pushButton_2.clicked.connect(self.watermark_regime)
@@ -244,6 +256,7 @@ class ExampleApp(QtWidgets.QMainWindow, design.Ui_MainWindow):
         self.mediaPlayer.error.connect(self.handleError)
         self.mediaPlayer.setVideoOutput(self.widget)
         self.BackButton2.clicked.connect(self.back2)
+        self.BackButton.clicked.connect(self.back2)
         self.NextButton.clicked.connect(self.next)
         self.BackButton3.clicked.connect(self.back3)
         self.MaskChoose2.clicked.connect(self.mask_choose2)
@@ -254,38 +267,99 @@ class ExampleApp(QtWidgets.QMainWindow, design.Ui_MainWindow):
         self.QualityChooseGroup2.addButton(self.AnyQuality)
         self.SaveChoose2.clicked.connect(self.save_choose2)
         self.Start2.clicked.connect(self.start_process2)
+        self.coords = QPointF()
+        self.NextMaskReady.clicked.connect(self.to_mask_ready)
+        self.BackButton3_2.clicked.connect(self.back5)
+        self.comboBox.currentIndexChanged.connect(self.change_pen_size)
+        self.NextButton2_2.clicked.connect(self.next3)
+        self.MaskReadyChoose.clicked.connect(self.mask_choose3)
+
+    def next3(self):
+        self.IfMaskCreated = False
+        self.stackedWidget.setCurrentIndex(4)
+
+    def change_pen_size(self, index):
+        if index == 1:
+            self.PenSize = 5
+        elif index == 2:
+            self.PenSize = 6
+        elif index == 3:
+            self.PenSize = 7
+        elif index == 4:
+            self.PenSize = 8
+        elif index == 5:
+            self.PenSize = 9
+        elif index == 6:
+            self.PenSize = 10
+
+    def back5(self):
+        self.stackedWidget.setCurrentIndex(2)
+
+    def to_mask_ready(self):
+        self.stackedWidget.setCurrentIndex(6)
     
     def back4(self):
         self.stackedWidget.setCurrentIndex(3)
 
     def next2(self):
+        self.mask_pixmap.save("tmp_mask.png")
+        self.IfMaskCreated = True
         self.stackedWidget.setCurrentIndex(4)
 
     def start_process2(self):
         if self.LowQuality.isChecked():
             self.stackedWidget.setCurrentIndex(5)
-            self.calc = External("e2fgvi", self.VideoName.text(), "release_model/E2FGVI-CVPR22.pth", self.MaskName.text(), self.SavePath2.toPlainText(), True)
+            if self.IfMaskCreated:
+                self.calc = External("e2fgvi", self.VideoName.text(), "release_model/E2FGVI-CVPR22.pth", "tmp_mask.png", self.SavePath2.toPlainText(), True)
+            else:
+                self.calc = External("e2fgvi", self.VideoName.text(), "release_model/E2FGVI-CVPR22.pth", self.MaskReadyPath.text(), self.SavePath2.toPlainText(), True)
             self.calc.countChanged.connect(self.onCountChanged)
             self.calc.maxValPass.connect(self.onMaxVal)
             self.calc.endSignal.connect(self.endProcess)
             self.calc.start()
         if self.AnyQuality.isChecked():
             self.stackedWidget.setCurrentIndex(5)
-            self.calc = External("e2fgvi_hq", self.VideoName.text(), "release_model/E2FGVI-HQ-CVPR22.pth", self.MaskName.text(), self.SavePath2.toPlainText(), True)
+            if self.IfMaskCreated:
+                self.calc = External("e2fgvi_hq", self.VideoName.text(), "release_model/E2FGVI-HQ-CVPR22.pth", "tmp_mask.png", self.SavePath2.toPlainText(), True)
+            else:
+                self.calc = External("e2fgvi", self.VideoName.text(), "release_model/E2FGVI-CVPR22.pth", self.MaskReadyPath.text(), self.SavePath2.toPlainText(), True)
             self.calc.countChanged.connect(self.onCountChanged)
             self.calc.maxValPass.connect(self.onMaxVal)
             self.calc.endSignal.connect(self.endProcess)
             self.calc.start()
 
+    def mouseMoveEvent(self, event):
+        if event.buttons() == Qt.LeftButton:
+            self.main_painter = QPainter(self.PhotoShow.pixmap())
+            self.mask_painter = QPainter(self.mask_pixmap)
+            self.main_painter.setPen(QPen(Qt.blue, self.PenSize, Qt.SolidLine))
+            self.mask_painter.setPen(QPen(Qt.blue, self.PenSize, Qt.SolidLine))
+            tmp_pos = self.PhotoShow.mapFromParent(event.pos())
+            xoffset = (self.PhotoShow.width() - self.PhotoShow.pixmap().width()) / 2
+            yoffset = (self.PhotoShow.height() - self.PhotoShow.pixmap().height()) / 2
+            self.main_painter.drawPoint(tmp_pos.x() - xoffset - 9, tmp_pos.y() - yoffset - 11)
+            self.mask_painter.drawPoint(tmp_pos.x() - xoffset - 9, tmp_pos.y() - yoffset - 11)
+            self.main_painter.end()
+            self.mask_painter.end()
+            self.update()
+
     def mask_choose2(self):
+        self.main_pixmap = QPixmap.fromImage(ImageQt(self.premask_frame))
+        self.main_pixmap = self.main_pixmap.scaledToHeight(self.PhotoShow.height())
+        self.PhotoShow.setPixmap(self.main_pixmap)
+        self.mask_pixmap = QPixmap(self.main_pixmap.width(), self.main_pixmap.height())
+        self.mask_pixmap.fill(Qt.black)
+
+    def mask_choose3(self):
         MaskDirectory = QtWidgets.QFileDialog.getOpenFileName(self, "Выберите файл", './', 'Images (*.jpg *.png *.jpeg)')
-        self.MaskName.setText(str(MaskDirectory[0]))
-        pixmap = QPixmap(str(MaskDirectory[0]))
-        pixmap = pixmap.scaledToHeight(self.PhotoShow.height())
-        self.PhotoShow.setPixmap(pixmap)
+        self.MaskReadyPath.setText(str(MaskDirectory[0]))
+        self.main_pixmap = QPixmap(str(MaskDirectory[0]))
+        self.main_pixmap = self.main_pixmap.scaledToHeight(self.PhotoShow.height())
+        self.PhotoShow.setPixmap(self.main_pixmap)
 
     def next(self):
         self.stackedWidget.setCurrentIndex(3)
+        self.showMaximized()
 
     def back2(self):
         self.stackedWidget.setCurrentIndex(0)
@@ -375,6 +449,7 @@ class ExampleApp(QtWidgets.QMainWindow, design.Ui_MainWindow):
             self.VideoPlay.setEnabled(True)
             self.VideoName.setText(str(VideoDirectory[0]))
             self.play()
+            self.premask_frame = get_frame_from_video(str(VideoDirectory[0]), True)
 
     def play(self):
         if self.mediaPlayer.state() == QMediaPlayer.PlayingState:
