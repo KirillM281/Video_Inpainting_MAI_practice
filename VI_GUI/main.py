@@ -299,7 +299,10 @@ class ExampleApp(QtWidgets.QMainWindow, design.Ui_MainWindow):
         self.stackedWidget.setCurrentIndex(6)
     
     def back4(self):
-        self.stackedWidget.setCurrentIndex(3)
+        if self.IfMaskCreated:
+            self.stackedWidget.setCurrentIndex(3)
+        else:
+            self.stackedWidget.setCurrentIndex(6)
 
     def next2(self):
         self.mask_pixmap.save("tmp_mask.png")
@@ -329,7 +332,7 @@ class ExampleApp(QtWidgets.QMainWindow, design.Ui_MainWindow):
             self.calc.start()
 
     def mouseMoveEvent(self, event):
-        if event.buttons() == Qt.LeftButton:
+        if event.buttons() == Qt.LeftButton and (not self.ismaskreadychosen):
             self.main_painter = QPainter(self.PhotoShow.pixmap())
             self.mask_painter = QPainter(self.mask_pixmap)
             self.main_painter.setPen(QPen(Qt.blue, self.PenSize, Qt.SolidLine))
@@ -344,6 +347,7 @@ class ExampleApp(QtWidgets.QMainWindow, design.Ui_MainWindow):
             self.update()
 
     def mask_choose2(self):
+        self.ismaskreadychosen = False
         self.main_pixmap = QPixmap.fromImage(ImageQt(self.premask_frame))
         self.main_pixmap = self.main_pixmap.scaledToHeight(self.PhotoShow.height())
         self.PhotoShow.setPixmap(self.main_pixmap)
@@ -351,11 +355,12 @@ class ExampleApp(QtWidgets.QMainWindow, design.Ui_MainWindow):
         self.mask_pixmap.fill(Qt.black)
 
     def mask_choose3(self):
+        self.ismaskreadychosen = True
         MaskDirectory = QtWidgets.QFileDialog.getOpenFileName(self, "Выберите файл", './', 'Images (*.jpg *.png *.jpeg)')
         self.MaskReadyPath.setText(str(MaskDirectory[0]))
         self.main_pixmap = QPixmap(str(MaskDirectory[0]))
         self.main_pixmap = self.main_pixmap.scaledToHeight(self.PhotoShow.height())
-        self.PhotoShow.setPixmap(self.main_pixmap)
+        self.PhotoShow2.setPixmap(self.main_pixmap)
 
     def next(self):
         self.stackedWidget.setCurrentIndex(3)
